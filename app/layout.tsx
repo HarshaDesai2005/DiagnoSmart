@@ -7,8 +7,8 @@ import { Toaster } from "@/components/ui/toaster";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Medical Report Analyzer",
-  description: "Analyze your medical reports with ease",
+  title: "DiagnoSmart AI",
+  description: "Smart, multilingual medical report interpretation",
 };
 
 export default function RootLayout({

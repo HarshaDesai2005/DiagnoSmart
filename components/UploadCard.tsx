@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Activity, FileText, Upload, X } from "lucide-react";
+import { Activity, FileText, Languages, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -11,28 +10,25 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import ResultsCard from "./ResultsCard";
+import { AnalysisLanguage, ReportRecord } from "@/lib/types";
 
 interface UploadCardProps {
   isAnalyzing: boolean;
   setIsAnalyzing: (isAnalyzing: boolean) => void;
-  onAnalyze: () => void;
-  analysisMethod: "url" | "upload";
-  setAnalysisMethod: (method: "url" | "upload") => void;
+  language: AnalysisLanguage;
+  setLanguage: (language: AnalysisLanguage) => void;
+  onAnalyzeSuccess: (record: ReportRecord) => void;
 }
 
 export default function UploadCard({
   isAnalyzing,
   setIsAnalyzing,
-  onAnalyze,
-  analysisMethod,
-  setAnalysisMethod,
+  language,
+  setLanguage,
+  onAnalyzeSuccess,
 }: UploadCardProps) {
-  const [fileUrl, setFileUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [analysisResult, setAnalysisResult] = useState(null);
   const { toast } = useToast();
 
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -63,10 +59,11 @@ export default function UploadCard({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (analysisMethod === "upload" && file) {
+    if (file) {
       setIsAnalyzing(true);
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("language", language);
 
       try {
         const response = await fetch("/api/upload", {
@@ -75,21 +72,24 @@ export default function UploadCard({
         });
 
         const result = await response.json();
-        console.log({ result });
 
         if (!response.ok) {
           throw new Error(result.error || "File upload failed");
         }
 
-        console.log({ result });
         toast({
           title: "File processed successfully",
           description: "Your medical report has been analyzed.",
         });
-        setAnalysisResult(result);
-        onAnalyze();
+        const record: ReportRecord = {
+          id: result.requestId ?? window.crypto.randomUUID(),
+          fileName: file.name,
+          createdAt: new Date().toISOString(),
+          language,
+          report: result.report.structured,
+        };
+        onAnalyzeSuccess(record);
       } catch (error) {
-        console.log("Error:", error);
         toast({
           title: "Error",
           description:
@@ -101,123 +101,111 @@ export default function UploadCard({
       } finally {
         setIsAnalyzing(false);
       }
-    } else if (analysisMethod === "url" && fileUrl) {
-      // Handle URL analysis here
-      onAnalyze();
+    } else {
+      toast({
+        title: "File missing",
+        description: "Please select a medical report to analyze.",
+        variant: "destructive",
+      });
     }
   };
 
   return (
     <>
-      <Card className="max-w-2xl mx-auto mb-8 bg-white shadow-lg">
-        <CardHeader>
-          <CardTitle className="text-green-700">
+      <Card className="mx-auto mb-10 max-w-3xl rounded-3xl border border-emerald-100 bg-white/90 shadow-2xl">
+        <CardHeader className="border-b border-emerald-100 bg-gradient-to-r from-emerald-50 to-cyan-50">
+          <CardTitle className="text-xl text-emerald-800 md:text-2xl">
             Upload Your Medical Report
           </CardTitle>
-          <CardDescription>
-            Upload your medical report file or provide a URL for analysis
+          <CardDescription className="text-slate-600">
+            Upload your medical report and choose language for the explanation
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-6 md:p-8">
           <form onSubmit={handleSubmit}>
-            <Tabs
-              value={analysisMethod}
-              onValueChange={(value) =>
-                setAnalysisMethod(value as "url" | "upload")
-              }
-              className="w-full"
+            <div className="mb-5 flex items-center justify-between rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3">
+              <p className="flex items-center text-sm font-medium text-emerald-800">
+                <Languages className="mr-2 h-4 w-4 text-emerald-700" />
+                Output Language
+              </p>
+              <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant={language === "en" ? "default" : "outline"}
+                onClick={() => setLanguage("en")}
+                className="h-9 rounded-xl"
+              >
+                English
+              </Button>
+              <Button
+                type="button"
+                variant={language === "hi" ? "default" : "outline"}
+                onClick={() => setLanguage("hi")}
+                className="h-9 rounded-xl"
+              >
+                Hindi
+              </Button>
+              </div>
+            </div>
+            <div
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onClick={() => document.getElementById("file-upload")?.click()}
+              className="group cursor-pointer rounded-2xl border-2 border-dashed border-emerald-200 bg-gradient-to-b from-white to-emerald-50/50 p-10 text-center transition-all hover:border-cyan-400 hover:shadow-lg"
             >
-              <TabsList className="grid w-full grid-cols-2 bg-green-100">
-                <TabsTrigger
-                  value="upload"
-                  className="data-[state=active]:bg-white data-[state=active]:text-green-700"
-                >
-                  Upload
-                </TabsTrigger>
-                <TabsTrigger
-                  value="url"
-                  className="data-[state=active]:bg-white data-[state=active]:text-green-700"
-                >
-                  URL
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value="upload">
-                <div
-                  onDrop={handleDrop}
-                  onDragOver={handleDragOver}
-                  onClick={() =>
-                    document.getElementById("file-upload")?.click()
-                  }
-                  className="border-2 border-dashed border-green-200 rounded-lg p-8 text-center cursor-pointer transition-colors hover:bg-green-50"
-                >
-                  {file ? (
-                    <div className="flex items-center justify-center space-x-2">
-                      <FileText className="w-8 h-8 text-green-600" />
-                      <span className="text-green-700 font-medium">
-                        {file.name}
-                      </span>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="rounded-full"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeFile();
-                        }}
-                      >
-                        <X className="w-4 h-4 text-green-700" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <>
-                      <Upload className="w-8 h-8 mx-auto mb-4 text-green-400" />
-                      <p className="text-base text-gray-700 font-medium flex flex-col">
-                        Drag and drop files here, or click to select files.
-                        <span className="text-gray-700">
-                          You can upload a file up to 15 MB.
-                        </span>
-                        <span className="text-sm text-gray-500 mt-1">
-                          Supported file types: PDF, JPEG, PNG.
-                        </span>
-                      </p>
-                    </>
-                  )}
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept=".pdf,.jpg,.png,.jpeg"
-                    id="file-upload"
-                    onChange={handleFileChange}
-                  />
+              {file ? (
+                <div className="flex items-center justify-center space-x-2">
+                  <FileText className="h-8 w-8 text-emerald-600" />
+                  <span className="font-medium text-emerald-800">
+                    {file.name}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full hover:bg-emerald-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeFile();
+                    }}
+                  >
+                    <X className="h-4 w-4 text-emerald-700" />
+                  </Button>
                 </div>
-              </TabsContent>
-              <TabsContent value="url">
-                <div className="flex space-x-2">
-                  <Input
-                    placeholder="Enter report URL"
-                    type="url"
-                    value={fileUrl}
-                    onChange={(e) => setFileUrl(e.target.value)}
-                    className="flex-1 border-green-200 focus:ring-green-500"
-                  />
-                </div>
-              </TabsContent>
-            </Tabs>
+              ) : (
+                <>
+                  <Upload className="mx-auto mb-4 h-9 w-9 text-emerald-500 transition-transform group-hover:scale-110" />
+                  <p className="flex flex-col text-base font-medium text-slate-700">
+                    Drag and drop files here, or click to select files.
+                    <span className="text-slate-600">
+                      You can upload a file up to 15 MB.
+                    </span>
+                    <span className="mt-1 text-sm text-slate-500">
+                      Supported file types: PDF, JPEG, PNG.
+                    </span>
+                  </p>
+                </>
+              )}
+              <input
+                type="file"
+                className="hidden"
+                accept=".pdf,.jpg,.png,.jpeg"
+                id="file-upload"
+                onChange={handleFileChange}
+              />
+            </div>
 
             {/* Tooltip for better file quality */}
-            <div className="relative mt-2">
-              <span className="text-sm text-gray-500 mt-1">
+            <div className="relative mt-3">
+              <span className="mt-1 text-sm text-slate-500">
                 For better analysis, please upload clear and high-quality files.
                 Avoid blurry or incomplete documents.
               </span>
             </div>
 
             <Button
-              className="w-full mt-4 bg-green-600 hover:bg-green-700 text-white"
-              disabled={
-                isAnalyzing || (analysisMethod === "url" ? !fileUrl : !file)
-              }
+              className="mt-6 h-12 w-full rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 text-white shadow-lg hover:from-emerald-700 hover:to-cyan-700"
+              disabled={isAnalyzing || !file}
             >
               {isAnalyzing ? (
                 <>
@@ -234,12 +222,6 @@ export default function UploadCard({
           </form>
         </CardContent>
       </Card>
-
-      {analysisResult && (
-        <div className="max-w-2xl mx-auto mb-8">
-          <ResultsCard analysisResult={analysisResult} />
-        </div>
-      )}
     </>
   );
 }
