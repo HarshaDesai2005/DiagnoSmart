@@ -1,4 +1,4 @@
-# DiagnoSmart (SwasthyaDarpan AI)
+# DiagnoSmart
 
 DiagnoSmart is an AI-powered medical report explainer. Upload a lab report (PDF/image), and the app converts complex clinical text into a clearer patient-friendly summary with abnormal values, risks, and recommendations.
 
