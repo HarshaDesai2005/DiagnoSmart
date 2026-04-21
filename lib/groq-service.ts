@@ -310,6 +310,14 @@ function safeJsonParse<T>(raw: string): T | null {
   try {
     return JSON.parse(raw) as T;
   } catch {
+    const objectLike = raw.match(/\{[\s\S]*\}/);
+    if (objectLike?.[0]) {
+      try {
+        return JSON.parse(objectLike[0]) as T;
+      } catch {
+        // continue to fenced-json fallback
+      }
+    }
     const fenced = raw.match(/```json\s*([\s\S]*?)```/i);
     if (!fenced?.[1]) {
       return null;
@@ -330,8 +338,140 @@ interface TranslationPayload {
   implications: string;
   recommendations: string[];
   redFlags: string[];
-  analysisMarkdown: string;
   disclaimer: string;
+  abnormalValues: Array<{
+    marker: string;
+    observedValue: string;
+    referenceRange: string;
+    status: string;
+    note: string;
+  }>;
+}
+
+function hasHindiScript(text: string) {
+  return /[\u0900-\u097F]/.test(text);
+}
+
+async function translateTextToHindi(text: string): Promise<string> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (hasHindiScript(trimmed)) {
+    return trimmed;
+  }
+
+  try {
+    const completion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content:
+            "Translate the given medical text to natural Hindi. Preserve numbers, ranges, units, and medicine names exactly. Return plain text only.",
+        },
+        {
+          role: "user",
+          content: trimmed,
+        },
+      ],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0,
+      max_tokens: 800,
+    });
+    return completion.choices[0]?.message?.content?.trim() || trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+async function translateListToHindi(items: string[]): Promise<string[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const translated = await Promise.all(items.map((item) => translateTextToHindi(item)));
+  return translated.map((item, index) => item || items[index]);
+}
+
+async function translateAbnormalValuesToHindi(
+  values: StructuredReport["abnormalValues"]
+): Promise<StructuredReport["abnormalValues"]> {
+  if (values.length === 0) {
+    return values;
+  }
+
+  const translated = await Promise.all(
+    values.map(async (value) => ({
+      ...value,
+      marker: await translateTextToHindi(value.marker),
+      note: value.note ? await translateTextToHindi(value.note) : "",
+    }))
+  );
+
+  return translated;
+}
+
+function normalizeStatusToken(rawStatus: string): MarkerStatus {
+  const normalized = rawStatus
+    .toLowerCase()
+    .replace("अधिक", "high")
+    .replace("कम", "low")
+    .replace("सामान्य", "normal")
+    .replace("गंभीर", "critical")
+    .replace("क्रिटिकल", "critical")
+    .replace("उच्च", "high")
+    .replace("निम्न", "low")
+    .trim();
+
+  if (normalized === "low" || normalized === "high" || normalized === "critical") {
+    return normalized;
+  }
+  return "normal";
+}
+
+function buildAnalysisMarkdown(report: StructuredReport): string {
+  const headings = sectionHeadings[report.language];
+  const recommendations = report.recommendations.length
+    ? report.recommendations.map((item) => `- ${item}`).join("\n")
+    : report.language === "hi"
+      ? "- कोई अतिरिक्त सुझाव नहीं मिला।"
+      : "- No additional recommendations were extracted.";
+  const redFlags = report.redFlags.length
+    ? report.redFlags.map((item) => `- ${item}`).join("\n")
+    : report.language === "hi"
+      ? "- उपलब्ध डेटा के आधार पर कोई तत्काल चेतावनी संकेत नहीं मिला।"
+      : "- No urgent red flags were detected from the available data.";
+  const tableHeader =
+    report.language === "hi"
+      ? "| सूचक/टेस्ट | वर्तमान मान | सामान्य सीमा | स्थिति | टिप्पणी |\n|---|---|---|---|---|"
+      : "| Marker/Test | Observed Value | Reference Range | Status | Note |\n|---|---|---|---|---|";
+  const tableRows = report.abnormalValues
+    .map(
+      (value) =>
+        `| ${value.marker} | ${value.observedValue} | ${value.referenceRange} | ${value.status} | ${value.note || ""} |`
+    )
+    .join("\n");
+
+  return endent`## ${headings.overview}
+  ${report.overview}
+
+  ## ${headings.explanation}
+  ${report.simplifiedExplanation}
+
+  ## ${headings.status}
+  ${report.healthStatus}
+
+  ## ${headings.implications}
+  ${report.implications}
+
+  ## ${headings.recommendations}
+  ${recommendations}
+
+  ## ${headings.redFlags}
+  ${redFlags}
+
+  ## ${headings.abnormalTable}
+  ${tableHeader}
+  ${tableRows}`.trim();
 }
 
 async function translateStructuredToHindi(base: StructuredReport): Promise<TranslationPayload | null> {
@@ -348,6 +488,8 @@ async function translateStructuredToHindi(base: StructuredReport): Promise<Trans
           content: endent`Translate this JSON payload to Hindi and return the same keys only.
           Keep recommendations/redFlags as arrays.
           Preserve numerical data exactly.
+          In abnormalValues: translate marker and note to Hindi, keep observedValue and referenceRange unchanged.
+          For abnormalValues.status, use only one of: low, normal, high, critical.
 
           ${JSON.stringify(
             {
@@ -358,9 +500,9 @@ async function translateStructuredToHindi(base: StructuredReport): Promise<Trans
               implications: base.implications,
               recommendations: base.recommendations,
               redFlags: base.redFlags,
-              analysisMarkdown: base.analysisMarkdown,
               disclaimer:
                 "This report is for informational purposes only and not a medical diagnosis. Contact your doctor immediately for severe symptoms.",
+              abnormalValues: base.abnormalValues,
             },
             null,
             2
@@ -369,7 +511,7 @@ async function translateStructuredToHindi(base: StructuredReport): Promise<Trans
       ],
       model: "llama-3.3-70b-versatile",
       temperature: 0,
-      max_tokens: 1400,
+      max_tokens: 2200,
     });
 
     const content = completion.choices[0]?.message?.content;
@@ -420,6 +562,8 @@ export async function processMedicalReport({
   }
 
   try {
+    // Keep canonical generation in English for stable abnormal-value parsing.
+    // Hindi output is produced from the structured translation step below.
     const generationLanguage: AnalysisLanguage = "en";
 
     const chatCompletion = await groq.chat.completions.create({
@@ -514,34 +658,74 @@ export async function processMedicalReport({
     if (language === "hi") {
       const translated = await translateStructuredToHindi(baseStructured);
       if (translated) {
+        const translatedAbnormalValues =
+          translated.abnormalValues?.length
+            ? translated.abnormalValues.map((value) => ({
+                marker: value.marker || "",
+                observedValue: value.observedValue || "",
+                referenceRange: value.referenceRange || "",
+                status: normalizeStatusToken(value.status),
+                note: value.note || "",
+              }))
+            : baseStructured.abnormalValues;
+
+        const forcedOverview = await translateTextToHindi(
+          translated.overview || baseStructured.overview
+        );
+        const forcedExplanation = await translateTextToHindi(
+          translated.simplifiedExplanation || baseStructured.simplifiedExplanation
+        );
+        const forcedHealthStatus = await translateTextToHindi(
+          translated.healthStatus || baseStructured.healthStatus
+        );
+        const forcedImplications = await translateTextToHindi(
+          translated.implications || baseStructured.implications
+        );
+        const forcedRecommendations = await translateListToHindi(
+          translated.recommendations?.length
+            ? translated.recommendations
+            : baseStructured.recommendations
+        );
+        const forcedRedFlags = await translateListToHindi(
+          translated.redFlags?.length ? translated.redFlags : baseStructured.redFlags
+        );
+        const forcedAbnormalValues = await translateAbnormalValuesToHindi(translatedAbnormalValues);
+
         structured = {
           ...baseStructured,
           language: "hi",
           title: translated.title || "मेडिकल रिपोर्ट विश्लेषण",
-          overview: translated.overview || baseStructured.overview,
-          simplifiedExplanation:
-            translated.simplifiedExplanation || baseStructured.simplifiedExplanation,
-          healthStatus: translated.healthStatus || baseStructured.healthStatus,
-          implications: translated.implications || baseStructured.implications,
-          recommendations:
-            translated.recommendations?.length
-              ? translated.recommendations
-              : baseStructured.recommendations,
-          redFlags: translated.redFlags ?? baseStructured.redFlags,
-          analysisMarkdown: translated.analysisMarkdown || baseStructured.analysisMarkdown,
+          overview: forcedOverview,
+          simplifiedExplanation: forcedExplanation,
+          healthStatus: forcedHealthStatus,
+          implications: forcedImplications,
+          recommendations: forcedRecommendations,
+          redFlags: forcedRedFlags,
           disclaimer:
-            translated.disclaimer ||
+            (await translateTextToHindi(translated.disclaimer || "")) ||
             "यह रिपोर्ट केवल जानकारी के लिए है, चिकित्सीय निदान के लिए नहीं। गंभीर लक्षण होने पर तुरंत डॉक्टर से संपर्क करें।",
-          // keep graph/table data canonical across languages
-          abnormalValues: baseStructured.abnormalValues,
+          abnormalValues: forcedAbnormalValues,
         };
+        structured.analysisMarkdown = buildAnalysisMarkdown(structured);
       } else {
+        const translatedFallbackAbnormalValues = await translateAbnormalValuesToHindi(
+          baseStructured.abnormalValues
+        );
         structured = {
           ...baseStructured,
           language: "hi",
+          title: await translateTextToHindi(baseStructured.title),
+          overview: await translateTextToHindi(baseStructured.overview),
+          simplifiedExplanation: await translateTextToHindi(baseStructured.simplifiedExplanation),
+          healthStatus: await translateTextToHindi(baseStructured.healthStatus),
+          implications: await translateTextToHindi(baseStructured.implications),
+          recommendations: await translateListToHindi(baseStructured.recommendations),
+          redFlags: await translateListToHindi(baseStructured.redFlags),
+          abnormalValues: translatedFallbackAbnormalValues,
           disclaimer:
             "यह रिपोर्ट केवल जानकारी के लिए है, चिकित्सीय निदान के लिए नहीं। गंभीर लक्षण होने पर तुरंत डॉक्टर से संपर्क करें।",
         };
+        structured.analysisMarkdown = buildAnalysisMarkdown(structured);
       }
     }
 

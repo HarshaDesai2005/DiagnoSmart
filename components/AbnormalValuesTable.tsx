@@ -12,6 +12,16 @@ interface AbnormalValuesTableProps {
   language: "en" | "hi";
 }
 
+function statusLabel(status: AbnormalValue["status"], language: "en" | "hi") {
+  if (language === "hi") {
+    if (status === "low") return "कम";
+    if (status === "normal") return "सामान्य";
+    if (status === "high") return "अधिक";
+    return "गंभीर";
+  }
+  return status.toUpperCase();
+}
+
 export default function AbnormalValuesTable({ values, language }: AbnormalValuesTableProps) {
   if (values.length === 0) {
     return (
@@ -41,7 +51,7 @@ export default function AbnormalValuesTable({ values, language }: AbnormalValues
               <td className="px-3 py-2">{value.referenceRange}</td>
               <td className="px-3 py-2">
                 <span className={`rounded px-2 py-1 text-xs font-semibold ${statusStyles[value.status]}`}>
-                  {value.status.toUpperCase()}
+                  {statusLabel(value.status, language)}
                 </span>
               </td>
               <td className="px-3 py-2">{value.note}</td>
